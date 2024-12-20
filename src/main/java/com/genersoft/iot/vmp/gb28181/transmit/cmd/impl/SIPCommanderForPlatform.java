@@ -7,6 +7,7 @@ import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.exception.SsrcTransactionNotFoundException;
 import com.genersoft.iot.vmp.gb28181.SipLayer;
 import com.genersoft.iot.vmp.gb28181.bean.*;
+import com.genersoft.iot.vmp.gb28181.dao.CommonGBChannelMapper;
 import com.genersoft.iot.vmp.gb28181.event.SipSubscribe;
 import com.genersoft.iot.vmp.gb28181.session.SipInviteSessionManager;
 import com.genersoft.iot.vmp.gb28181.transmit.SIPSender;
@@ -58,9 +59,6 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
 
     @Autowired
     private IMediaServerService mediaServerService;
-
-    @Autowired
-    private SipSubscribe sipSubscribe;
 
     @Autowired
     private SipLayer sipLayer;
@@ -127,23 +125,19 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
                 // 将 callid 写入缓存， 等注册成功可以更新状态
                 String callIdFromHeader = callIdHeader.getCallId();
                 redisCatchStorage.updatePlatformRegisterInfo(callIdFromHeader, PlatformRegisterInfo.getInstance(parentPlatform.getServerGBId(), isRegister));
-
-                sipSubscribe.addErrorSubscribe(callIdHeader.getCallId(), (event)->{
-                    if (event != null) {
-                        log.info("向上级平台 [ {} ] 注册发生错误： {} ",
-                                parentPlatform.getServerGBId(),
-                                event.msg);
-                    }
-                    redisCatchStorage.delPlatformRegisterInfo(callIdFromHeader);
-                    if (errorEvent != null ) {
-                        errorEvent.response(event);
-                    }
-                });
             }else {
                 request = headerProviderPlatformProvider.createRegisterRequest(parentPlatform, fromTag, toTag, www, callIdHeader, isRegister? parentPlatform.getExpires() : 0);
             }
 
-            sipSender.transmitRequest(parentPlatform.getDeviceIp(), request, null, okEvent);
+            sipSender.transmitRequest(parentPlatform.getDeviceIp(), request, (event)->{
+                if (event != null) {
+                    log.info("[国标级联]：{},  注册失败: {} ", parentPlatform.getServerGBId(), event.msg);
+                }
+                redisCatchStorage.delPlatformRegisterInfo(callIdHeader.getCallId());
+                if (errorEvent != null ) {
+                    errorEvent.response(event);
+                }
+            }, okEvent, 5L);
     }
 
     @Override
@@ -167,6 +161,7 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
                 SipUtils.getNewFromTag(),
                 SipUtils.getNewViaTag(),
                 callIdHeader);
+
         sipSender.transmitRequest(parentPlatform.getDeviceIp(), request, errorEvent, okEvent);
         return callIdHeader.getCallId();
     }
@@ -225,7 +220,7 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
     }
 
     private void sendCatalogResponse(List<CommonGBChannel> channels, Platform parentPlatform, String sn, String fromTag, int index, boolean sendAfterResponse) throws SipException, InvalidArgumentException, ParseException {
-        if (index >= channels.size()) {
+        if (index > channels.size()) {
             return;
         }
         List<CommonGBChannel> deviceChannels;
@@ -233,6 +228,9 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
             deviceChannels = channels.subList(index, index + parentPlatform.getCatalogGroup());
         }else {
             deviceChannels = channels.subList(index, channels.size());
+        }
+        if(deviceChannels.isEmpty()) {
+            return;
         }
         String catalogXml = getCatalogXml(deviceChannels, sn, parentPlatform, channels.size());
         // callid
@@ -249,16 +247,17 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
         log.debug(catalogXml);
         if (sendAfterResponse) {
             // 默认按照收到200回复后发送下一条， 如果超时收不到回复，就以30毫秒的间隔直接发送。
-            dynamicTask.startDelay(timeoutTaskKey, ()->{
-                sipSubscribe.removeOkSubscribe(callId);
-                int indexNext = index + parentPlatform.getCatalogGroup();
-                try {
-                    sendCatalogResponse(channels, parentPlatform, sn, fromTag, indexNext, false);
-                } catch (SipException | InvalidArgumentException | ParseException e) {
-                    log.error("[命令发送失败] 国标级联 目录查询回复: {}", e.getMessage());
-                }
-            }, 3000);
             sipSender.transmitRequest(parentPlatform.getDeviceIp(), request, eventResult -> {
+                if (eventResult.type.equals(SipSubscribe.EventResultType.timeout)) {
+                    // 消息发送超时, 以30毫秒的间隔直接发送
+                    int indexNext = index + parentPlatform.getCatalogGroup();
+                    try {
+                        sendCatalogResponse(channels, parentPlatform, sn, fromTag, indexNext, false);
+                    } catch (SipException | InvalidArgumentException | ParseException e) {
+                        log.error("[命令发送失败] 国标级联 目录查询回复: {}", e.getMessage());
+                    }
+                    return;
+                }
                 log.error("[目录推送失败] 国标级联 platform : {}, code: {}, msg: {}, 停止发送", parentPlatform.getServerGBId(), eventResult.statusCode, eventResult.msg);
                 dynamicTask.stop(timeoutTaskKey);
             }, eventResult -> {
@@ -282,7 +281,7 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
                 } catch (SipException | InvalidArgumentException | ParseException e) {
                     log.error("[命令发送失败] 国标级联 目录查询回复: {}", e.getMessage());
                 }
-            }, 30);
+            }, 100);
         }
     }
 
@@ -598,11 +597,10 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
     }
 
     @Override
-    public void sendMediaStatusNotify(Platform parentPlatform, SendRtpInfo sendRtpItem) throws SipException, InvalidArgumentException, ParseException {
-        if (sendRtpItem == null || parentPlatform == null) {
+    public void sendMediaStatusNotify(Platform parentPlatform, SendRtpInfo sendRtpInfo, CommonGBChannel channel) throws SipException, InvalidArgumentException, ParseException {
+        if (channel == null || parentPlatform == null) {
             return;
         }
-
 
         String characterSet = parentPlatform.getCharacterSet();
         StringBuffer mediaStatusXml = new StringBuffer(200);
@@ -610,12 +608,12 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
                 .append("<Notify>\r\n")
                 .append("<CmdType>MediaStatus</CmdType>\r\n")
                 .append("<SN>" + (int)((Math.random()*9+1)*100000) + "</SN>\r\n")
-                .append("<DeviceID>" + sendRtpItem.getChannelId() + "</DeviceID>\r\n")
+                .append("<DeviceID>" + channel.getGbDeviceId() + "</DeviceID>\r\n")
                 .append("<NotifyType>121</NotifyType>\r\n")
                 .append("</Notify>\r\n");
 
         SIPRequest messageRequest = (SIPRequest)headerProviderPlatformProvider.createMessageRequest(parentPlatform, mediaStatusXml.toString(),
-                sendRtpItem);
+                sendRtpInfo);
 
         sipSender.transmitRequest(parentPlatform.getDeviceIp(),messageRequest);
 
@@ -690,7 +688,7 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
     }
 
     @Override
-    public void broadcastInviteCmd(Platform platform, CommonGBChannel channel, MediaServer mediaServerItem,
+    public void broadcastInviteCmd(Platform platform, CommonGBChannel channel,String sourceId, MediaServer mediaServerItem,
                                    SSRCInfo ssrcInfo, HookSubscribe.Event event, SipSubscribe.Event okEvent,
                                    SipSubscribe.Event errorEvent) throws ParseException, SipException, InvalidArgumentException {
         String stream = ssrcInfo.getStream();
@@ -711,8 +709,9 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
 
         StringBuffer content = new StringBuffer(200);
         content.append("v=0\r\n");
-        content.append("o=" + channel.getGbDeviceId() + " 0 0 IN IP4 " + sdpIp + "\r\n");
+        content.append("o=" + platform.getDeviceGBId() + " 0 0 IN IP4 " + sdpIp + "\r\n");
         content.append("s=Play\r\n");
+        content.append("u=" + channel.getGbDeviceId() + ":0\r\n");
         content.append("c=IN IP4 " + sdpIp + "\r\n");
         content.append("t=0 0\r\n");
 
@@ -736,9 +735,11 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
         }
 
         content.append("y=" + ssrcInfo.getSsrc() + "\r\n");//ssrc
+        // f字段:f= v/编码格式/分辨率/帧率/码率类型/码率大小a/编码格式/码率大小/采样率
+        content.append("f=v/2/5/25/1/4096a/1/8/1\r\n");
         CallIdHeader callIdHeader = sipSender.getNewCallIdHeader(sipLayer.getLocalIp(platform.getDeviceIp()), platform.getTransport());
 
-        Request request = headerProviderPlatformProvider.createInviteRequest(platform, channel.getGbDeviceId(),
+        Request request = headerProviderPlatformProvider.createInviteRequest(platform, sourceId, channel.getGbDeviceId(),
                 content.toString(), SipUtils.getNewViaTag(), SipUtils.getNewFromTag(),  ssrcInfo.getSsrc(),
                 callIdHeader);
         sipSender.transmitRequest(sipLayer.getLocalIp(platform.getDeviceIp()), request, (e -> {

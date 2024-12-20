@@ -65,7 +65,7 @@ public interface IMediaServerService {
 
     boolean checkMediaRecordServer(String ip, int port);
 
-    void delete(String id);
+    void delete(MediaServer mediaServer);
 
     MediaServer getDefaultMediaServer();
 
@@ -142,7 +142,7 @@ public interface IMediaServerService {
 
     Boolean isStreamReady(MediaServer mediaServer, String rtp, String streamId);
 
-    void startSendRtpPassive(MediaServer mediaServer, SendRtpInfo sendRtpItem, Integer timeout);
+    Integer startSendRtpPassive(MediaServer mediaServer, SendRtpInfo sendRtpItem, Integer timeout);
 
     void startSendRtp(MediaServer mediaServer, SendRtpInfo sendRtpItem);
 
@@ -158,4 +158,5 @@ public interface IMediaServerService {
 
     int createRTPServer(MediaServer mediaServerItem, String streamId, long ssrc, Integer port, boolean onlyAuto, boolean disableAudio, boolean reUsePort, Integer tcpMode);
 
+    List<String> listRtpServer(MediaServer mediaServer);
 }

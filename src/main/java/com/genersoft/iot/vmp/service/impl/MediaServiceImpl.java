@@ -8,16 +8,14 @@ import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.exception.ControllerException;
 import com.genersoft.iot.vmp.gb28181.bean.DeviceChannel;
 import com.genersoft.iot.vmp.gb28181.bean.SsrcTransaction;
-import com.genersoft.iot.vmp.gb28181.service.*;
-import com.genersoft.iot.vmp.gb28181.session.SSRCFactory;
+import com.genersoft.iot.vmp.gb28181.service.IDeviceChannelService;
+import com.genersoft.iot.vmp.gb28181.service.IInviteStreamService;
 import com.genersoft.iot.vmp.gb28181.session.SipInviteSessionManager;
-import com.genersoft.iot.vmp.gb28181.transmit.cmd.ISIPCommander;
-import com.genersoft.iot.vmp.gb28181.transmit.cmd.ISIPCommanderForPlatform;
 import com.genersoft.iot.vmp.media.bean.MediaServer;
 import com.genersoft.iot.vmp.media.bean.ResultForOnPublish;
 import com.genersoft.iot.vmp.media.zlm.dto.StreamAuthorityInfo;
 import com.genersoft.iot.vmp.service.IMediaService;
-import com.genersoft.iot.vmp.service.ISendRtpServerService;
+import com.genersoft.iot.vmp.service.IRecordPlanService;
 import com.genersoft.iot.vmp.service.IUserService;
 import com.genersoft.iot.vmp.storager.IRedisCatchStorage;
 import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
@@ -57,31 +55,13 @@ public class MediaServiceImpl implements IMediaService {
     private IInviteStreamService inviteStreamService;
 
     @Autowired
-    private SSRCFactory ssrcFactory;
-
-    @Autowired
     private IDeviceChannelService deviceChannelService;
 
     @Autowired
     private SipInviteSessionManager sessionManager;
 
     @Autowired
-    private IPlatformService platformService;
-
-    @Autowired
-    private IGbChannelService channelService;
-
-    @Autowired
-    private IDeviceService deviceService;
-
-    @Autowired
-    private ISIPCommanderForPlatform commanderForPlatform;
-
-    @Autowired
-    private ISIPCommander commander;
-
-    @Autowired
-    private ISendRtpServerService sendRtpServerService;
+    private IRecordPlanService recordPlanService;
 
     @Override
     public boolean authenticatePlay(String app, String stream, String callId) {
@@ -102,6 +82,12 @@ public class MediaServiceImpl implements IMediaService {
     public ResultForOnPublish authenticatePublish(MediaServer mediaServer, String app, String stream, String params) {
         // 推流鉴权的处理
         if (!"rtp".equals(app)) {
+            if ("talk".equals(app) && stream.endsWith("_talk")) {
+                ResultForOnPublish result = new ResultForOnPublish();
+                result.setEnable_mp4(false);
+                result.setEnable_audio(true);
+                return result;
+            }
             StreamProxy streamProxyItem = streamProxyService.getStreamProxyByAppAndStream(app, stream);
             if (streamProxyItem != null) {
                 ResultForOnPublish result = new ResultForOnPublish();
@@ -147,7 +133,7 @@ public class MediaServiceImpl implements IMediaService {
         if ("rtp".equals(app)) {
             result.setEnable_mp4(userSetting.getRecordSip());
         } else {
-            result.setEnable_mp4(userSetting.isRecordPushLive());
+            result.setEnable_mp4(userSetting.getRecordPushLive());
         }
         // 国标流
         if ("rtp".equals(app)) {
@@ -223,6 +209,9 @@ public class MediaServiceImpl implements IMediaService {
     @Override
     public boolean closeStreamOnNoneReader(String mediaServerId, String app, String stream, String schema) {
         boolean result = false;
+        if (recordPlanService.recording(app, stream) != null) {
+            return false;
+        }
         // 国标类型的流
         if ("rtp".equals(app)) {
             result = userSetting.getStreamOnDemand();

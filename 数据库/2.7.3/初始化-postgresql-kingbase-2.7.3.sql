@@ -83,19 +83,6 @@ create table wvp_gb_stream
     constraint uk_gb_stream_unique_app_stream unique (app, stream)
 );
 
-create table wvp_log
-(
-    id          serial primary key,
-    name        character varying(50),
-    type        character varying(50),
-    uri         character varying(200),
-    address     character varying(50),
-    result      character varying(50),
-    timing      bigint,
-    username    character varying(50),
-    create_time character varying(50)
-);
-
 create table wvp_device_channel
 (
     id                           serial primary key,
@@ -163,8 +150,8 @@ create table wvp_device_channel
     gb_port                      integer,
     gb_password                  character varying(50),
     gb_status                    character varying(50),
-    gb_longitude                 double,
-    gb_latitude                  double,
+    gb_longitude                 double precision,
+    gb_latitude                  double precision,
     gb_business_group_id         character varying(50),
     gb_ptz_type                  integer,
     gb_position_type             integer,
@@ -176,6 +163,7 @@ create table wvp_device_channel
     gb_download_speed            character varying(255),
     gb_svc_space_support_mod     integer,
     gb_svc_time_support_mode     integer,
+    record_plan_id               integer,
     stream_push_id               integer,
     stream_proxy_id              integer,
     constraint uk_wvp_device_channel_unique_device_channel unique (device_db_id, device_id),
@@ -184,6 +172,7 @@ create table wvp_device_channel
     constraint uk_wvp_unique_stream_proxy_id unique (stream_proxy_id)
 );
 
+create index uk_wvp_device_db_id on wvp_device_channel (device_db_id);
 
 
 create table wvp_media_server
@@ -366,15 +355,15 @@ create table wvp_cloud_record
     app             character varying(255),
     stream          character varying(255),
     call_id         character varying(255),
-    start_time      bigint,
-    end_time        bigint,
+    start_time      int8,
+    end_time        int8,
     media_server_id character varying(50),
     file_name       character varying(255),
     folder          character varying(255),
     file_path       character varying(255),
     collect         bool default false,
-    file_size       bigint,
-    time_len        bigint,
+    file_size       int8,
+    time_len        int8,
     constraint uk_stream_push_app_stream_path unique (app, stream, file_path)
 );
 
@@ -412,10 +401,10 @@ create table wvp_resources_tree
 create table wvp_user_api_key
 (
     id          serial primary key,
-    user_id     bigint,
+    user_id     int8,
     app         character varying(255),
     api_key     text,
-    expired_at  bigint,
+    expired_at  int8,
     remark      character varying(255),
     enable      bool default true,
     create_time character varying(50),
@@ -454,5 +443,25 @@ CREATE TABLE wvp_common_region
     create_time      varchar(50)  NOT NULL,
     update_time      varchar(50)  NOT NULL,
     constraint uk_common_region_device_id unique (device_id)
+);
+
+create table wvp_record_plan
+(
+    id              serial primary key,
+    snap            bool default false,
+    name            varchar(255) NOT NULL,
+    create_time     character varying(50),
+    update_time     character varying(50)
+);
+
+create table wvp_record_plan_item
+(
+    id              serial primary key,
+    start           int,
+    stop            int,
+    week_day        int,
+    plan_id        int,
+    create_time     character varying(50),
+    update_time     character varying(50)
 );
 

@@ -142,15 +142,10 @@ public class SIPCommander implements ISIPCommander {
         builder.append(strTmp, 0, 2);
         strTmp = String.format("%02X", parameter2);
         builder.append(strTmp, 0, 2);
-        //优化zoom变倍速率
-        if ((combineCode2 > 0) && (combineCode2 <16))
-        {
-            combineCode2 = 16;
-        }
-        strTmp = String.format("%X", combineCode2);
-        builder.append(strTmp, 0, 1).append("0");
+        strTmp = String.format("%02X", combineCode2 << 4);
+        builder.append(strTmp, 0, 2);
         //计算校验码
-        int checkCode = (0XA5 + 0X0F + 0X01 + cmdCode + parameter1 + parameter2 + (combineCode2 & 0XF0)) % 0X100;
+        int checkCode = (0XA5 + 0X0F + 0X01 + cmdCode + parameter1 + parameter2 + (combineCode2 << 4)) % 0X100;
         strTmp = String.format("%02X", checkCode);
         builder.append(strTmp, 0, 2);
         return builder.toString();
@@ -262,7 +257,7 @@ public class SIPCommander implements ISIPCommander {
      */
     @Override
     public void playStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
-                              SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent) throws InvalidArgumentException, SipException, ParseException {
+                              SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent, Long timeout) throws InvalidArgumentException, SipException, ParseException {
         String stream = ssrcInfo.getStream();
 
         if (device == null) {
@@ -276,12 +271,12 @@ public class SIPCommander implements ISIPCommander {
         }
         StringBuffer content = new StringBuffer(200);
         content.append("v=0\r\n");
-        content.append("o=" + channel.getDeviceId() + " 0 0 IN IP4 " + sdpIp + "\r\n");
+        content.append("o=" + device.getDeviceId() + " 0 0 IN IP4 " + sdpIp + "\r\n");
         content.append("s=Play\r\n");
         content.append("c=IN IP4 " + sdpIp + "\r\n");
         content.append("t=0 0\r\n");
 
-        if (userSetting.isSeniorSdp()) {
+        if (userSetting.getSeniorSdp()) {
             if ("TCP-PASSIVE".equalsIgnoreCase(device.getStreamMode())) {
                 content.append("m=video " + ssrcInfo.getPort() + " TCP/RTP/AVP 96 126 125 99 34 98 97\r\n");
             } else if ("TCP-ACTIVE".equalsIgnoreCase(device.getStreamMode())) {
@@ -335,8 +330,6 @@ public class SIPCommander implements ISIPCommander {
         // f字段:f= v/编码格式/分辨率/帧率/码率类型/码率大小a/编码格式/码率大小/采样率
 //			content.append("f=v/2/5/25/1/4000a/1/8/1" + "\r\n"); // 未发现支持此特性的设备
 
-
-
         Request request = headerProvider.createInviteRequest(device, channel.getDeviceId(), content.toString(), SipUtils.getNewViaTag(), SipUtils.getNewFromTag(), null, ssrcInfo.getSsrc(),sipSender.getNewCallIdHeader(sipLayer.getLocalIp(device.getLocalIp()),device.getTransport()));
         sipSender.transmitRequest(sipLayer.getLocalIp(device.getLocalIp()), request, (e -> {
             sessionManager.removeByStream(ssrcInfo.getStream());
@@ -350,7 +343,7 @@ public class SIPCommander implements ISIPCommander {
                     InviteSessionType.PLAY);
             sessionManager.put(ssrcTransaction);
             okEvent.response(e);
-        });
+        }, timeout);
     }
 
     /**
@@ -364,7 +357,7 @@ public class SIPCommander implements ISIPCommander {
     @Override
     public void playbackStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
                                   String startTime, String endTime,
-                                  SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent) throws InvalidArgumentException, SipException, ParseException {
+                                  SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent, Long timeout) throws InvalidArgumentException, SipException, ParseException {
 
 
         log.info("{} 分配的ZLM为: {} [{}:{}]", ssrcInfo.getStream(), mediaServerItem.getId(), mediaServerItem.getSdpIp(), ssrcInfo.getPort());
@@ -376,7 +369,7 @@ public class SIPCommander implements ISIPCommander {
         }
         StringBuffer content = new StringBuffer(200);
         content.append("v=0\r\n");
-        content.append("o=" + channel.getDeviceId() + " 0 0 IN IP4 " + sdpIp + "\r\n");
+        content.append("o=" + device.getDeviceId() + " 0 0 IN IP4 " + sdpIp + "\r\n");
         content.append("s=Playback\r\n");
         content.append("u=" + channel.getDeviceId() + ":0\r\n");
         content.append("c=IN IP4 " + sdpIp + "\r\n");
@@ -385,7 +378,7 @@ public class SIPCommander implements ISIPCommander {
 
         String streamMode = device.getStreamMode();
 
-        if (userSetting.isSeniorSdp()) {
+        if (userSetting.getSeniorSdp()) {
             if ("TCP-PASSIVE".equalsIgnoreCase(streamMode)) {
                 content.append("m=video " + ssrcInfo.getPort() + " TCP/RTP/AVP 96 126 125 99 34 98 97\r\n");
             } else if ("TCP-ACTIVE".equalsIgnoreCase(streamMode)) {
@@ -445,7 +438,7 @@ public class SIPCommander implements ISIPCommander {
                     channel.getId(), sipSender.getNewCallIdHeader(sipLayer.getLocalIp(device.getLocalIp()),device.getTransport()).getCallId(), ssrcInfo.getStream(), ssrcInfo.getSsrc(), mediaServerItem.getId(), response, InviteSessionType.PLAYBACK);
             sessionManager.put(ssrcTransaction);
             okEvent.response(event);
-        });
+        }, timeout);
     }
 
     /**
@@ -454,7 +447,7 @@ public class SIPCommander implements ISIPCommander {
     @Override
     public void downloadStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
                                   String startTime, String endTime, int downloadSpeed,
-                                  SipSubscribe.Event errorEvent, SipSubscribe.Event okEvent) throws InvalidArgumentException, SipException, ParseException {
+                                  SipSubscribe.Event errorEvent, SipSubscribe.Event okEvent, Long timeout) throws InvalidArgumentException, SipException, ParseException {
 
         log.info("[发送-请求历史媒体下载-命令] 流ID： {}，节点为: {} [{}:{}]", ssrcInfo.getStream(), mediaServerItem.getId(), mediaServerItem.getSdpIp(), ssrcInfo.getPort());
         String sdpIp;
@@ -465,7 +458,7 @@ public class SIPCommander implements ISIPCommander {
         }
         StringBuffer content = new StringBuffer(200);
         content.append("v=0\r\n");
-        content.append("o=" + channel.getDeviceId() + " 0 0 IN IP4 " + sdpIp + "\r\n");
+        content.append("o=" + device.getDeviceId() + " 0 0 IN IP4 " + sdpIp + "\r\n");
         content.append("s=Download\r\n");
         content.append("u=" + channel.getDeviceId() + ":0\r\n");
         content.append("c=IN IP4 " + sdpIp + "\r\n");
@@ -474,7 +467,7 @@ public class SIPCommander implements ISIPCommander {
 
         String streamMode = device.getStreamMode().toUpperCase();
 
-        if (userSetting.isSeniorSdp()) {
+        if (userSetting.getSeniorSdp()) {
             if ("TCP-PASSIVE".equals(streamMode)) {
                 content.append("m=video " + ssrcInfo.getPort() + " TCP/RTP/AVP 96 126 125 99 34 98 97\r\n");
             } else if ("TCP-ACTIVE".equals(streamMode)) {
@@ -536,11 +529,13 @@ public class SIPCommander implements ISIPCommander {
             SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(), channel.getId(), response.getCallIdHeader().getCallId(), ssrcInfo.getStream(), ssrc, mediaServerItem.getId(), response, InviteSessionType.DOWNLOAD);
             sessionManager.put(ssrcTransaction);
             okEvent.response(event);
-        });
+        }, timeout);
     }
 
     @Override
-    public void talkStreamCmd(MediaServer mediaServerItem, SendRtpInfo sendRtpItem, Device device, DeviceChannel channel, String callId, HookSubscribe.Event event, HookSubscribe.Event eventForPush, SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent) throws InvalidArgumentException, SipException, ParseException {
+    public void talkStreamCmd(MediaServer mediaServerItem, SendRtpInfo sendRtpItem, Device device, DeviceChannel channel,
+                              String callId, HookSubscribe.Event event, HookSubscribe.Event eventForPush, SipSubscribe.Event okEvent,
+                              SipSubscribe.Event errorEvent, Long timeout) throws InvalidArgumentException, SipException, ParseException {
 
         String stream = sendRtpItem.getStream();
 
@@ -573,7 +568,7 @@ public class SIPCommander implements ISIPCommander {
         //
         StringBuffer content = new StringBuffer(200);
         content.append("v=0\r\n");
-        content.append("o=" + channel.getDeviceId() + " 0 0 IN IP4 " + mediaServerItem.getSdpIp() + "\r\n");
+        content.append("o=" + device.getDeviceId() + " 0 0 IN IP4 " + mediaServerItem.getSdpIp() + "\r\n");
         content.append("s=Talk\r\n");
         content.append("c=IN IP4 " + mediaServerItem.getSdpIp() + "\r\n");
         content.append("t=0 0\r\n");
@@ -601,7 +596,7 @@ public class SIPCommander implements ISIPCommander {
             SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(), channel.getId(), "talk", stream, sendRtpItem.getSsrc(), mediaServerItem.getId(), response, InviteSessionType.TALK);
             sessionManager.put(ssrcTransaction);
             okEvent.response(e);
-        });
+        }, timeout);
     }
 
     /**
@@ -985,8 +980,6 @@ public class SIPCommander implements ISIPCommander {
         catalogXml.append("  <SN>" + sn + "</SN>\r\n");
         catalogXml.append("  <DeviceID>" + device.getDeviceId() + "</DeviceID>\r\n");
         catalogXml.append("</Query>\r\n");
-
-
 
         Request request = headerProvider.createMessageRequest(device, catalogXml.toString(), SipUtils.getNewViaTag(), SipUtils.getNewFromTag(), null,sipSender.getNewCallIdHeader(sipLayer.getLocalIp(device.getLocalIp()),device.getTransport()));
 

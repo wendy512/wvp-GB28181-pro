@@ -3,7 +3,8 @@ package com.genersoft.iot.vmp.gb28181.bean;
 import lombok.Data;
 
 import java.time.Instant;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * @author lin
@@ -14,16 +15,18 @@ public class CatalogData {
      * 命令序列号
      */
     private int sn;
-    private int total;
-    private List<DeviceChannel> channelList;
-    private List<Region> regionListList;
-    private List<Group> groupListListList;
-    private Instant lastTime;
+    private Integer total;
+    private Instant time;
     private Device device;
     private String errorMsg;
+    private Set<String> redisKeysForChannel = new HashSet<>();
+    private Set<String> errorChannel = new HashSet<>();
+    private Set<String> redisKeysForRegion = new HashSet<>();
+    private Set<String> redisKeysForGroup = new HashSet<>();
 
     public enum CatalogDataStatus{
         ready, runIng, end
     }
     private CatalogDataStatus status;
+
 }

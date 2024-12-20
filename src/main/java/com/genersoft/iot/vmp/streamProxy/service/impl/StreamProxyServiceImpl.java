@@ -121,7 +121,7 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
     @EventListener
     @Transactional
     public void onApplicationEvent(MediaServerOnlineEvent event) {
-        zlmServerOnline(event.getMediaServerId());
+        zlmServerOnline(event.getMediaServer());
     }
 
     /**
@@ -131,7 +131,7 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
     @EventListener
     @Transactional
     public void onApplicationEvent(MediaServerOfflineEvent event) {
-        zlmServerOffline(event.getMediaServerId());
+        zlmServerOffline(event.getMediaServer());
     }
 
 
@@ -230,22 +230,17 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
                 gbChannelService.add(streamProxy.buildCommonGBChannel());
             }
         }
-        // 判断是否需要重启代理
-        if (!streamProxyInDb.getApp().equals(streamProxy.getApp())
-                || !streamProxyInDb.getStream().equals(streamProxy.getStream())
-                || (streamProxyInDb.getMediaServerId() != null && streamProxyInDb.getMediaServerId().equals(streamProxy.getMediaServerId()))
-                || (streamProxyInDb.getMediaServerId() == null && streamProxy.getMediaServerId() != null)
-        ) {
-            // 变化则重启代理
-            playService.stopProxy(streamProxyInDb);
-            playService.startProxy(streamProxy);
-        }
         return true;
     }
 
     @Override
     public PageInfo<StreamProxy> getAll(Integer page, Integer count, String query, Boolean pulling, String mediaServerId) {
         PageHelper.startPage(page, count);
+        if (query != null) {
+            query = query.replaceAll("/", "//")
+                    .replaceAll("%", "/%")
+                    .replaceAll("_", "/_");
+        }
         List<StreamProxy> all = streamProxyMapper.selectAll(query, pulling, mediaServerId);
         return new PageInfo<>(all);
     }
@@ -284,15 +279,14 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
 
     @Override
     @Transactional
-    public void zlmServerOnline(String mediaServerId) {
-        MediaServer mediaServer = mediaServerService.getOne(mediaServerId);
+    public void zlmServerOnline(MediaServer mediaServer) {
         if (mediaServer == null) {
             return;
         }
         // 这里主要是控制数据库/redis缓存/以及zlm中存在的代理流 三者状态一致。以数据库中数据为根本
-        redisCatchStorage.removeStream(mediaServerId, "pull");
+        redisCatchStorage.removeStream(mediaServer.getId(), "PULL");
 
-        List<StreamProxy> streamProxies = streamProxyMapper.selectForEnableInMediaServer(mediaServerId, true);
+        List<StreamProxy> streamProxies = streamProxyMapper.selectForPushingInMediaServer(mediaServer.getId(), true);
         if (streamProxies.isEmpty()) {
             return;
         }
@@ -349,21 +343,19 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
             streamProxyMapper.deleteByList(streamProxiesForRemove);
         }
 
-
         if (!streamProxyMapForDb.isEmpty()) {
             for (StreamProxy streamProxy : streamProxyMapForDb.values()) {
-                log.info("恢复流代理，" + streamProxy.getApp() + "/" + streamProxy.getStream());
-                mediaServerService.startProxy(mediaServer, streamProxy);
+                streamProxyMapper.offline(streamProxy.getId());
             }
         }
     }
 
     @Override
-    public void zlmServerOffline(String mediaServerId) {
-        List<StreamProxy> streamProxies = streamProxyMapper.selectForEnableInMediaServer(mediaServerId, true);
+    public void zlmServerOffline(MediaServer mediaServer) {
+        List<StreamProxy> streamProxies = streamProxyMapper.selectForPushingInMediaServer(mediaServer.getId(), true);
 
         // 清理redis相关的缓存
-        redisCatchStorage.removeStream(mediaServerId, "pull");
+        redisCatchStorage.removeStream(mediaServer.getId(), "PULL");
 
         if (streamProxies.isEmpty()) {
             return;
@@ -383,11 +375,14 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
                 streamProxiesForSendMessage.add(streamProxy);
             }
         }
-        // 移除开启了无人观看自动移除的流
-        streamProxyMapper.deleteByList(streamProxiesForRemove);
-        // 修改国标关联的国标通道的状态
-        gbChannelService.offline(channelListForOffline);
-
+        if (!streamProxiesForRemove.isEmpty()) {
+            // 移除开启了无人观看自动移除的流
+            streamProxyMapper.deleteByList(streamProxiesForRemove);
+        }
+        if (!streamProxiesForRemove.isEmpty()) {
+            // 修改国标关联的国标通道的状态
+            gbChannelService.offline(channelListForOffline);
+        }
         if (!streamProxiesForSendMessage.isEmpty()) {
             for (StreamProxy streamProxy : streamProxiesForSendMessage) {
                 JSONObject jsonObject = new JSONObject();
@@ -395,7 +390,7 @@ public class StreamProxyServiceImpl implements IStreamProxyService {
                 jsonObject.put("app", streamProxy.getApp());
                 jsonObject.put("stream", streamProxy.getStream());
                 jsonObject.put("register", false);
-                jsonObject.put("mediaServerId", mediaServerId);
+                jsonObject.put("mediaServerId", mediaServer);
                 redisCatchStorage.sendStreamChangeMsg("pull", jsonObject);
             }
         }

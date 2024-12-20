@@ -1,5 +1,6 @@
 package com.genersoft.iot.vmp.gb28181.service.impl;
 
+import com.alibaba.fastjson2.JSON;
 import com.baomidou.dynamic.datasource.annotation.DS;
 import com.genersoft.iot.vmp.common.CommonCallback;
 import com.genersoft.iot.vmp.common.VideoManagerConstants;
@@ -19,7 +20,6 @@ import com.genersoft.iot.vmp.gb28181.task.ISubscribeTask;
 import com.genersoft.iot.vmp.gb28181.task.impl.CatalogSubscribeTask;
 import com.genersoft.iot.vmp.gb28181.task.impl.MobilePositionSubscribeTask;
 import com.genersoft.iot.vmp.gb28181.transmit.cmd.ISIPCommander;
-import com.genersoft.iot.vmp.gb28181.transmit.cmd.impl.SIPCommander;
 import com.genersoft.iot.vmp.gb28181.transmit.event.request.impl.message.response.cmd.CatalogResponseMessageHandler;
 import com.genersoft.iot.vmp.media.bean.MediaServer;
 import com.genersoft.iot.vmp.media.service.IMediaServerService;
@@ -34,7 +34,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.ObjectUtils;
 
 import javax.sip.InvalidArgumentException;
 import javax.sip.SipException;
@@ -50,9 +49,6 @@ import java.util.concurrent.TimeUnit;
 @Service
 @DS("master")
 public class DeviceServiceImpl implements IDeviceService {
-
-    @Autowired
-    private SIPCommander cmder;
 
     @Autowired
     private DynamicTask dynamicTask;
@@ -168,15 +164,13 @@ public class DeviceServiceImpl implements IDeviceService {
                 }
 
             }else {
-                if (deviceChannelMapper.queryChannelsByDeviceDbId(device.getId()).isEmpty()) {
-                    log.info("[设备上线]: {}，通道数为0,查询通道信息", device.getDeviceId());
-                    sync(device);
-                }
-
                 deviceMapper.update(device);
                 redisCatchStorage.updateDevice(device);
             }
-
+            if (deviceChannelMapper.queryChannelsByDeviceDbId(device.getId()).isEmpty()) {
+                log.info("[设备上线]: {}，通道数为0,查询通道信息", device.getDeviceId());
+                sync(device);
+            }
         }
 
         // 刷新过期任务
@@ -329,7 +323,8 @@ public class DeviceServiceImpl implements IDeviceService {
     @Override
     public void sync(Device device) {
         if (catalogResponseMessageHandler.isSyncRunning(device.getDeviceId())) {
-            log.info("开启同步时发现同步已经存在");
+            SyncStatus syncStatus = catalogResponseMessageHandler.getChannelSyncProgress(device.getDeviceId());
+            log.info("[同步通道] 同步已存在, 设备: {}, 同步信息: {}", device.getDeviceId(), JSON.toJSON(syncStatus));
             return;
         }
         int sn = (int)((Math.random()*9+1)*100000);
@@ -337,12 +332,13 @@ public class DeviceServiceImpl implements IDeviceService {
         try {
             sipCommander.catalogQuery(device, sn, event -> {
                 String errorMsg = String.format("同步通道失败，错误码： %s, %s", event.statusCode, event.msg);
-                catalogResponseMessageHandler.setChannelSyncEnd(device.getDeviceId(), errorMsg);
+                log.info("[同步通道]失败,编号: {}, 错误码： {}, {}", device.getDeviceId(), event.statusCode, event.msg);
+                catalogResponseMessageHandler.setChannelSyncEnd(device.getDeviceId(), sn, errorMsg);
             });
         } catch (SipException | InvalidArgumentException | ParseException e) {
             log.error("[同步通道], 信令发送失败：{}", e.getMessage() );
             String errorMsg = String.format("同步通道失败，信令发送失败： %s", e.getMessage());
-            catalogResponseMessageHandler.setChannelSyncEnd(device.getDeviceId(), errorMsg);
+            catalogResponseMessageHandler.setChannelSyncEnd(device.getDeviceId(), sn, errorMsg);
         }
     }
 
@@ -415,39 +411,19 @@ public class DeviceServiceImpl implements IDeviceService {
         device.setOnLine(false);
         device.setCreateTime(DateUtil.getNow());
         device.setUpdateTime(DateUtil.getNow());
+        if(device.getStreamMode() == null) {
+            device.setStreamMode("UDP");
+        }
         deviceMapper.addCustomDevice(device);
     }
 
     @Override
     public void updateCustomDevice(Device device) {
-        Device deviceInStore = deviceMapper.getDeviceByDeviceId(device.getDeviceId());
+        Device deviceInStore = deviceMapper.query(device.getId());
         if (deviceInStore == null) {
             log.warn("更新设备时未找到设备信息");
             return;
         }
-
-        if (!ObjectUtils.isEmpty(device.getName())) {
-            deviceInStore.setName(device.getName());
-        }
-        if (!ObjectUtils.isEmpty(device.getCharset())) {
-            deviceInStore.setCharset(device.getCharset());
-        }
-        if (!ObjectUtils.isEmpty(device.getMediaServerId())) {
-            deviceInStore.setMediaServerId(device.getMediaServerId());
-        }
-        if (!ObjectUtils.isEmpty(device.getCharset())) {
-            deviceInStore.setCharset(device.getCharset());
-        }
-        if (!ObjectUtils.isEmpty(device.getSdpIp())) {
-            deviceInStore.setSdpIp(device.getSdpIp());
-        }
-        if (!ObjectUtils.isEmpty(device.getPassword())) {
-            deviceInStore.setPassword(device.getPassword());
-        }
-        if (!ObjectUtils.isEmpty(device.getStreamMode())) {
-            deviceInStore.setStreamMode(device.getStreamMode());
-        }
-        deviceInStore.setBroadcastPushAfterAck(device.isBroadcastPushAfterAck());
         //  目录订阅相关的信息
         if (deviceInStore.getSubscribeCycleForCatalog() != device.getSubscribeCycleForCatalog()) {
             if (device.getSubscribeCycleForCatalog() > 0) {
@@ -512,13 +488,9 @@ public class DeviceServiceImpl implements IDeviceService {
         if (device.getCharset() == null) {
             deviceInStore.setCharset("GB2312");
         }
-        //SSRC校验
-        deviceInStore.setSsrcCheck(device.isSsrcCheck());
-        //作为消息通道
-        deviceInStore.setAsMessageChannel(device.isAsMessageChannel());
 
-        deviceMapper.updateCustom(deviceInStore);
-        redisCatchStorage.updateDevice(deviceInStore);
+        deviceMapper.updateCustom(device);
+        redisCatchStorage.updateDevice(device);
     }
 
     @Override
@@ -548,9 +520,14 @@ public class DeviceServiceImpl implements IDeviceService {
     }
 
     @Override
-    public PageInfo<Device> getAll(int page, int count, String query, String deviceId, Boolean status) {
+    public PageInfo<Device> getAll(int page, int count, String query, Boolean status) {
         PageHelper.startPage(page, count);
-        List<Device> all = deviceMapper.getDeviceList(query, deviceId, status);
+        if (query != null) {
+            query = query.replaceAll("/", "//")
+                    .replaceAll("%", "/%")
+                    .replaceAll("_", "/_");
+        }
+        List<Device> all = deviceMapper.getDeviceList(query, status);
         return new PageInfo<>(all);
     }
 

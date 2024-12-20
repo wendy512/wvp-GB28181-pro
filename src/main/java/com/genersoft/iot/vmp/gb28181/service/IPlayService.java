@@ -30,15 +30,15 @@ public interface IPlayService {
     MediaServer getNewMediaServerItem(Device device);
 
     void playBack(Device device, DeviceChannel channel, String startTime, String endTime, ErrorCallback<StreamInfo> callback);
-    void zlmServerOffline(String mediaServerId);
+    void zlmServerOffline(MediaServer mediaServer);
 
     void download(Device device, DeviceChannel channel, String startTime, String endTime, int downloadSpeed, ErrorCallback<StreamInfo> callback);
 
     StreamInfo getDownLoadInfo(Device device, DeviceChannel channel, String stream);
 
-    void zlmServerOnline(String mediaServerId);
+    void zlmServerOnline(MediaServer mediaServer);
 
-    AudioBroadcastResult audioBroadcast(Device device, String channelId, Boolean broadcastMode);
+    AudioBroadcastResult audioBroadcast(Device device, DeviceChannel deviceChannel, Boolean broadcastMode);
 
     boolean audioBroadcastCmd(Device device, DeviceChannel channel, MediaServer mediaServerItem, String app, String stream, int timeout, boolean isFromPlatform, AudioBroadcastEvent event) throws InvalidArgumentException, ParseException, SipException;
 

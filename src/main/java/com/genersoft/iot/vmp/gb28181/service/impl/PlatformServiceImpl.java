@@ -159,6 +159,11 @@ public class PlatformServiceImpl implements IPlatformService {
     @Override
     public PageInfo<Platform> queryPlatformList(int page, int count, String query) {
         PageHelper.startPage(page, count);
+        if (query != null) {
+            query = query.replaceAll("/", "//")
+                    .replaceAll("%", "/%")
+                    .replaceAll("_", "/_");
+        }
         List<Platform> all = platformMapper.queryList(query);
         return new PageInfo<>(all);
     }
@@ -246,32 +251,6 @@ public class PlatformServiceImpl implements IPlatformService {
         return false;
     }
 
-    private void unregister(Platform platform) {
-        // 停止心跳定时
-        final String keepaliveTaskKey = KEEPALIVE_KEY_PREFIX + platform.getServerGBId();
-        dynamicTask.stop(keepaliveTaskKey);
-        // 停止注册定时
-        final String registerTaskKey = REGISTER_KEY_PREFIX + platform.getServerGBId();
-        dynamicTask.stop(registerTaskKey);
-
-        PlatformCatch platformCatchOld = redisCatchStorage.queryPlatformCatchInfo(platform.getServerGBId());
-        // 注销旧的
-        try {
-            if (platform.isStatus()) {
-                commanderForPlatform.unregister(platform, platformCatchOld.getSipTransactionInfo(), null, eventResult -> {
-                    log.info("[国标级联] 注销命令发送成功，平台：{}", platform.getServerGBId());
-                });
-            }
-        } catch (InvalidArgumentException | ParseException | SipException e) {
-            log.error("[命令发送失败] 国标级联 注销: {}", e.getMessage());
-        }
-    }
-
-    private void register(Platform platform) {
-
-    }
-
-
     @Override
     public void online(Platform platform, SipTransactionInfo sipTransactionInfo) {
         log.info("[国标级联]：{}, 平台上线", platform.getServerGBId());
@@ -335,7 +314,7 @@ public class PlatformServiceImpl implements IPlatformService {
                                     platformCatchForNow.setKeepAliveReply(0);
                                     redisCatchStorage.updatePlatformCatchInfo(platformCatchForNow);
                                 }
-                                log.info("[发送心跳] 国标级联 发送心跳, code： {}, msg: {}", eventResult.statusCode, eventResult.msg);
+                                log.info("[国标级联] 发送心跳,平台{}({}), code： {}, msg: {}", platform.getName(), platform.getServerGBId(), eventResult.statusCode, eventResult.msg);
                             });
                         } catch (SipException | InvalidArgumentException | ParseException e) {
                             log.error("[命令发送失败] 国标级联 发送心跳: {}", e.getMessage());
@@ -380,7 +359,9 @@ public class PlatformServiceImpl implements IPlatformService {
             commanderForPlatform.register(platform, sipTransactionInfo,  eventResult -> {
                 log.info("[国标级联] 平台：{}注册失败，{}:{}", platform.getServerGBId(),
                         eventResult.statusCode, eventResult.msg);
-                offline(platform, false);
+                if (platform.isStatus()) {
+                    offline(platform, false);
+                }
             }, null);
         } catch (Exception e) {
             log.error("[命令发送失败] 国标级联定时注册: {}", e.getMessage());
@@ -503,14 +484,14 @@ public class PlatformServiceImpl implements IPlatformService {
     }
 
     @Override
-    public void broadcastInvite(Platform platform, CommonGBChannel channel, MediaServer mediaServerItem, HookSubscribe.Event hookEvent,
+    public void broadcastInvite(Platform platform, CommonGBChannel channel, String sourceId, MediaServer mediaServerItem, HookSubscribe.Event hookEvent,
                                 SipSubscribe.Event errorEvent, InviteTimeOutCallback timeoutCallback) throws InvalidArgumentException, ParseException, SipException {
 
         if (mediaServerItem == null) {
             log.info("[国标级联] 语音喊话未找到可用的zlm. platform: {}", platform.getServerGBId());
             return;
         }
-        InviteInfo inviteInfoForOld = inviteStreamService.getInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getGbId());
+        InviteInfo inviteInfoForOld = inviteStreamService.getInviteInfoByDeviceAndChannel(InviteSessionType.BROADCAST, channel.getGbId());
 
         if (inviteInfoForOld != null && inviteInfoForOld.getStreamInfo() != null) {
             // 如果zlm不存在这个流，则删除数据即可
@@ -560,7 +541,7 @@ public class PlatformServiceImpl implements IPlatformService {
                 platform.getServerGBId(), channel.getGbDeviceId(), ssrcInfo.getPort(), userSetting.getBroadcastForPlatform(), ssrcInfo.getSsrc(), ssrcCheck);
 
         // 初始化redis中的invite消息状态
-        InviteInfo inviteInfo = InviteInfo.getInviteInfo(platform.getServerGBId(), channel.getGbId(), ssrcInfo.getStream(), ssrcInfo,
+        InviteInfo inviteInfo = InviteInfo.getInviteInfo(platform.getServerGBId(), channel.getGbId(), ssrcInfo.getStream(), ssrcInfo, mediaServerItem.getId(),
                 mediaServerItem.getSdpIp(), ssrcInfo.getPort(), userSetting.getBroadcastForPlatform(), InviteSessionType.BROADCAST,
                 InviteSessionStatus.ready);
         inviteStreamService.updateInviteInfo(inviteInfo);
@@ -584,7 +565,7 @@ public class PlatformServiceImpl implements IPlatformService {
                 }
             }
         }, userSetting.getPlayTimeout());
-        commanderForPlatform.broadcastInviteCmd(platform, channel, mediaServerItem, ssrcInfo, (hookData)->{
+        commanderForPlatform.broadcastInviteCmd(platform, channel,sourceId, mediaServerItem, ssrcInfo, (hookData)->{
             log.info("[国标级联] 发起语音喊话 收到上级推流 deviceId: {}, channelId: {}", platform.getServerGBId(), channel.getGbDeviceId());
             dynamicTask.stop(timeOutTaskKey);
             // hook响应
@@ -597,45 +578,6 @@ public class PlatformServiceImpl implements IPlatformService {
 
             inviteOKHandler(event, ssrcInfo, tcpMode, ssrcCheck, mediaServerItem, platform, channel, timeOutTaskKey,
                     null, inviteInfo, InviteSessionType.BROADCAST);
-//            // 收到200OK 检测ssrc是否有变化，防止上级自定义了ssrc
-//            ResponseEvent responseEvent = (ResponseEvent) event.event;
-//            String contentString = new String(responseEvent.getResponse().getRawContent());
-//            // 获取ssrc
-//            int ssrcIndex = contentString.indexOf("y=");
-//            // 检查是否有y字段
-//            if (ssrcIndex >= 0) {
-//                //ssrc规定长度为10字节，不取余下长度以避免后续还有“f=”字段 TODO 后续对不规范的非10位ssrc兼容
-//                String ssrcInResponse = contentString.substring(ssrcIndex + 2, ssrcIndex + 12);
-//                // 查询到ssrc不一致且开启了ssrc校验则需要针对处理
-//                if (ssrcInfo.getSsrc().equals(ssrcInResponse) || ssrcCheck) {
-//                    tcpActiveHandler(platform, )
-//                    return;
-//                }
-//                logger.info("[点播消息] 收到invite 200, 发现下级自定义了ssrc: {}", ssrcInResponse);
-//                if (!mediaServerItem.isRtpEnable()) {
-//                    logger.info("[点播消息] SSRC修正 {}->{}", ssrcInfo.getSsrc(), ssrcInResponse);
-//                    // 释放ssrc
-//                    mediaServerService.releaseSsrc(mediaServerItem.getId(), ssrcInfo.getSsrc());
-//                    // 单端口模式streamId也有变化，需要重新设置监听
-//                    if (!mediaServerItem.isRtpEnable()) {
-//                        // 添加订阅
-//                        HookSubscribeForStreamChange hookSubscribe = HookSubscribeFactory.on_stream_changed("rtp", ssrcInfo.getStream(), true, "rtsp", mediaServerItem.getId());
-//                        subscribe.removeSubscribe(hookSubscribe);
-//                        hookSubscribe.getContent().put("stream", String.format("%08x", Integer.parseInt(ssrcInResponse)).toUpperCase());
-//                        subscribe.addSubscribe(hookSubscribe, (mediaServerItemInUse, hookParam) -> {
-//                            logger.info("[ZLM HOOK] ssrc修正后收到订阅消息： " + hookParam);
-//                            dynamicTask.stop(timeOutTaskKey);
-//                            // hook响应
-//                            playService.onPublishHandlerForPlay(mediaServerItemInUse, hookParam, platform.getServerGBId(), channelId);
-//                            hookEvent.response(mediaServerItemInUse, hookParam);
-//                        });
-//                    }
-//                    // 关闭rtp server
-//                    mediaServerService.closeRTPServer(mediaServerItem, ssrcInfo.getStream());
-//                    // 重新开启ssrc server
-//                    mediaServerService.openRTPServer(mediaServerItem, ssrcInfo.getStream(), ssrcInResponse, false, false, ssrcInfo.getPort(), true, false, tcpMode);
-//                }
-//            }
         }, eventResult -> {
             // 收到错误回复
             if (errorEvent != null) {

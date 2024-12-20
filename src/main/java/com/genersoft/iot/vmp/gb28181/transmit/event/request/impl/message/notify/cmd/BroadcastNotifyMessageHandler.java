@@ -91,7 +91,13 @@ public class BroadcastNotifyMessageHandler extends SIPRequestProcessorParent imp
             }
             String targetId = targetIDElement.getText();
 
-
+            Element sourceIdElement = rootElement.element("SourceID");
+            String sourceId;
+            if (sourceIdElement != null) {
+                sourceId = sourceIdElement.getText();
+            }else {
+                sourceId = targetId;
+            }
             log.info("[国标级联 语音喊话] platform: {}, channel: {}", platform.getServerGBId(), targetId);
 
             CommonGBChannel channel = channelService.queryOneWithPlatform(platform.getId(), targetId);
@@ -123,10 +129,9 @@ public class BroadcastNotifyMessageHandler extends SIPRequestProcessorParent imp
             commanderForPlatform.broadcastResultCmd(platform, channel, sn, true,  eventResult->{
                 log.info("[国标级联] 语音喊话 回复失败 platform： {}， 错误：{}/{}", platform.getServerGBId(), eventResult.statusCode, eventResult.msg);
             }, eventResult->{
-
                 // 消息发送成功， 向上级发送invite，获取推流
                 try {
-                    platformService.broadcastInvite(platform, channel, mediaServerForMinimumLoad,  (hookData)->{
+                    platformService.broadcastInvite(platform, channel, sourceId, mediaServerForMinimumLoad,  (hookData)->{
                         // 上级平台推流成功
                         AudioBroadcastCatch broadcastCatch = audioBroadcastManager.get(channel.getGbId());
                         if (broadcastCatch != null ) {
